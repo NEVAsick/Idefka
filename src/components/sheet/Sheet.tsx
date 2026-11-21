@@ -52,7 +52,7 @@ function ArrowLabel({ geom: g, color, interactive }: { geom: ArrowGeom; color: s
       data-id={interactive ? g.id : undefined}
       x={g.labelAt.x}
       y={g.labelAt.y}
-      fontSize={LABEL_SIZE}
+      fontSize={g.fontSize ?? LABEL_SIZE}
       fontFamily={DIAGRAM_FONT}
       fill={color}
       textAnchor={g.labelAnchor}
