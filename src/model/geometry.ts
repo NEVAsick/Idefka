@@ -1,14 +1,14 @@
 import type { Arrow, Box, Diagram, Endpoint, Model, Pt, Rect, Side } from './types';
-import { AREA } from './sheet';
+import { AREA, GRID } from './sheet';
 import { labelInherited, labelOf, ROLE_BY_SIDE, type Role } from './query';
 import { centerAnchored, isContainer } from './notation';
 import { canBranch, linkStyle } from './links';
-import { measure } from './text';
+import { measure, wrap } from './text';
 import { DOWN, isHorizontal, LEFT, LineUsage, opposite, removeJogs, RIGHT, route, STUB, UP, type Dir } from './router';
 import { projectOnPath, type Bounds } from './path';
 
 export const LABEL_SIZE = 11.5;
-export const LABEL_LH = 14;
+export const LABEL_PADDING = 2;
 
 export interface ArrowGeom {
   id: string;
@@ -29,7 +29,8 @@ export interface ArrowGeom {
   manual: boolean;
   tunnelAt?: { point: Pt; dir: Dir };
   icom?: { text: string; at: Pt; anchor: 'start' | 'end' };
-  fontSize?: number;
+  fontSize: number;
+  lineHeight: number;
 }
 
 type End = 'from' | 'to';
@@ -114,9 +115,20 @@ export function computeAnchors(model: Model, diagram: Diagram): Anchors {
       .map(([group, members]) => ({ group, members, coord: members.reduce((sum, m) => sum + m.otherCoord, 0) / members.length }))
       .sort((p, q) => p.coord - q.coord || (p.group < q.group ? -1 : 1));
 
+    const centered = centerAnchored(box.kind);
+    const axis = isVerticalSide(side) ? 'y' : 'x';
+    const spacing = (axis === 'y' ? box.h : box.w) / (ordered.length + 1);
     ordered.forEach(({ members }, i) => {
-      const ratio = centerAnchored(box.kind) ? 0.5 : (i + 1) / (ordered.length + 1);
+      const ratio = centered ? 0.5 : (i + 1) / (ordered.length + 1);
       const point = sidePoint(box, side, ratio);
+      if (!centered && members.length === 1) {
+        const { arrow, end } = members[0];
+        const border = end === 'from' ? arrow.to : arrow.from;
+        // Совмещаем порт с близкой закреплённой точкой на рамке, оставляя зазор до соседних портов.
+        if (border.t === 'border' && border.fixed && border.side === side && Math.abs(border.at - point[axis]) <= Math.min(GRID, spacing / 3)) {
+          point[axis] = border.at;
+        }
+      }
       for (const { arrow, end } of members) anchors.set(arrow.id, { ...anchors.get(arrow.id), [end]: point });
     });
   }
@@ -298,7 +310,15 @@ function messageCourse(diagram: Diagram, arrow: Arrow, boxById: Map<string, Box>
   return { points: [{ x: startX, y }, { x: endX, y }], startDir: dir, endDir: dir };
 }
 
-function placeLabel(points: Pt[], lines: string[], textWidth: number, arrow: Arrow) {
+export function layoutArrowLabel(points: Pt[], label: string, arrow: Arrow) {
+  const fontSize = arrow.fontSize ?? LABEL_SIZE;
+  const lineHeight = fontSize * (14 / LABEL_SIZE);
+  const innerWidth = arrow.labelWidth === undefined ? undefined : Math.max(2 * fontSize, arrow.labelWidth - 2 * LABEL_PADDING);
+  const lines = innerWidth === undefined ? label.split('\n').map((line) => line.trim()) : wrap(label, innerWidth, fontSize);
+  const textWidth = innerWidth ?? lines.reduce((width, line) => Math.max(width, measure(line, fontSize)), 0);
+  const width = textWidth + 2 * LABEL_PADDING;
+  const textHeight = lines.length * lineHeight;
+  const height = Math.max(arrow.labelHeight ?? 0, textHeight + 2 * LABEL_PADDING);
   let longest = 0;
   let segment = 1;
   for (let i = 1; i < points.length; i++) {
@@ -311,31 +331,31 @@ function placeLabel(points: Pt[], lines: string[], textWidth: number, arrow: Arr
 
   const a = points[segment - 1];
   const b = points[segment];
-  const extraLines = lines.length - 1;
   const right = AREA.x + AREA.w - 4;
   const left = AREA.x + 4;
 
-  let at: Pt;
+  let x: number;
+  let y: number;
   let anchor: 'start' | 'middle' | 'end';
   if (Math.abs(a.y - b.y) < 0.5) {
-    const x = Math.max(left + textWidth / 2, Math.min(right - textWidth / 2, (a.x + b.x) / 2));
-    at = { x, y: a.y - 6 - extraLines * LABEL_LH };
+    x = Math.max(left, Math.min(right - width, (a.x + b.x - width) / 2));
+    y = a.y - 2 - height;
     anchor = 'middle';
   } else {
-    at = { x: a.x + 6, y: (a.y + b.y) / 2 + 4 - (extraLines * LABEL_LH) / 2 };
-    anchor = 'start';
-    if (at.x + textWidth > right) {
-      at = { x: a.x - 6, y: at.y };
-      anchor = 'end';
-    }
+    anchor = a.x + 4 + width <= right ? 'start' : 'end';
+    x = anchor === 'start' ? a.x + 4 : a.x - 4 - width;
+    y = (a.y + b.y - height) / 2;
   }
-  at = { x: at.x + (arrow.labelDx ?? 0), y: at.y + (arrow.labelDy ?? 0) };
-
-  const boxLeft = anchor === 'start' ? at.x : anchor === 'end' ? at.x - textWidth : at.x - textWidth / 2;
-  const box: Bounds = { x1: boxLeft - 2, y1: at.y - 11, x2: boxLeft + textWidth + 2, y2: at.y + extraLines * LABEL_LH + 4 };
+  x += arrow.labelDx ?? 0;
+  y += arrow.labelDy ?? 0;
+  const at = {
+    x: anchor === 'start' ? x + LABEL_PADDING : anchor === 'end' ? x + width - LABEL_PADDING : x + width / 2,
+    y: y + (height - textHeight) / 2 + fontSize,
+  };
+  const box: Bounds = { x1: x, y1: y, x2: x + width, y2: y + height };
   const boxCenter = { x: (box.x1 + box.x2) / 2, y: (box.y1 + box.y2) / 2 };
   const far = !!(arrow.labelDx || arrow.labelDy) && projectOnPath(points, boxCenter).distance > 26;
-  return { at, anchor, box, far };
+  return { lines, fontSize, lineHeight, labelAt: at, labelAnchor: anchor, labelBox: box, labelFar: far };
 }
 
 function icomLabel(code: string, ends: { from: Endpoint; to: Endpoint }): ArrowGeom['icom'] {
@@ -437,10 +457,6 @@ export function computeGeometry(model: Model, diagram: Diagram): ArrowGeom[] {
     if (!message) usage.add(points, group);
     routes.set(arrow.id, points);
 
-    const lines = label.split('\n').map((l) => l.trim());
-    const textWidth = Math.max(0, ...lines.map((l) => measure(l, LABEL_SIZE)));
-    const placed = placeLabel(points, lines, textWidth, arrow);
-
     const forkKey = labelKey ? `${labelKey}@${Math.round(points[0].x)},${Math.round(points[0].y)}` : '';
     const showLabel = !!label.trim() && !labelInherited(model, arrow) && (!forkKey || !shownForkLabels.has(forkKey));
     if (forkKey) shownForkLabels.add(forkKey);
@@ -453,12 +469,8 @@ export function computeGeometry(model: Model, diagram: Diagram): ArrowGeom[] {
       startDir,
       endDir,
       label,
-      lines,
+      ...layoutArrowLabel(points, label, arrow),
       showLabel,
-      labelAt: placed.at,
-      labelAnchor: placed.anchor,
-      labelBox: placed.box,
-      labelFar: placed.far,
       danglingFrom: arrow.from.t === 'free' || (arrow.from.t === 'tap' && !branch),
       danglingTo: arrow.to.t === 'free' || (arrow.to.t === 'tap' && !headless),
       headless,
@@ -466,7 +478,6 @@ export function computeGeometry(model: Model, diagram: Diagram): ArrowGeom[] {
       manual: !!manual,
       tunnelAt: tunnelMark(arrow, points, boxById),
       icom: code ? icomLabel(code, ends) : undefined,
-      fontSize: arrow.fontSize, // <-- НОВОЕ
     });
   }
 

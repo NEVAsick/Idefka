@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import type { Arrow, Box, Diagram, Model } from '../../model/types';
-import type { ArrowGeom } from '../../model/geometry';
+import { LABEL_PADDING, layoutArrowLabel, type ArrowGeom } from '../../model/geometry';
 import { labelOf, labelOwner } from '../../model/query';
 import { isContainer, labelBelow } from '../../model/notation';
 import { commit, getState, setState, type Editing } from '../../store';
@@ -40,18 +40,19 @@ function boxEditorStyle(box: Box, { x, y, z }: View): CSSProperties {
   return { left: x + box.x * z, top: y + box.y * z, width: box.w * z, height: box.h * z, fontSize: 13 * z, textAlign: 'center', padding: `${8 * z}px` };
 }
 
-function arrowEditorStyle(g: ArrowGeom | undefined, lineCount: number, { x, y, z }: View): CSSProperties {
-  const at = g?.labelAt ?? { x: 0, y: 0 };
-  const anchor = g?.labelAnchor ?? 'middle';
-  const left = anchor === 'start' ? at.x : anchor === 'end' ? at.x - ARROW_EDITOR_WIDTH : at.x - ARROW_EDITOR_WIDTH / 2;
+function arrowEditorStyle(g: ArrowGeom, arrow: Arrow, value: string, { x, y, z }: View): CSSProperties {
+  const labelWidth = arrow.labelWidth ?? Math.max(ARROW_EDITOR_WIDTH, g.labelBox.x2 - g.labelBox.x1);
+  const { labelBox, labelAnchor, fontSize, lineHeight, lines } = layoutArrowLabel(g.points, value, { ...arrow, labelWidth });
+  const height = labelBox.y2 - labelBox.y1;
   return {
-    left: x + left * z,
-    top: y + (at.y - 14) * z,
-    width: ARROW_EDITOR_WIDTH * z,
-    height: (8 + lineCount * 14) * z,
-    fontSize: 11.5 * z,
-    textAlign: anchor === 'start' ? 'left' : anchor === 'end' ? 'right' : 'center',
-    padding: `${2 * z}px ${4 * z}px`,
+    left: x + labelBox.x1 * z,
+    top: y + labelBox.y1 * z,
+    width: (labelBox.x2 - labelBox.x1) * z,
+    height: height * z,
+    fontSize: fontSize * z,
+    lineHeight: `${lineHeight * z}px`,
+    textAlign: labelAnchor === 'start' ? 'left' : labelAnchor === 'end' ? 'right' : 'center',
+    padding: `${(height - lines.length * lineHeight) * z / 2}px ${LABEL_PADDING * z}px`,
   };
 }
 
@@ -112,8 +113,8 @@ export function InlineEditor({ editing, model, diagram, view, geomById }: Inline
     setState({ editing: null });
   };
 
-  const lineCount = Math.max(1, value.split('\n').length);
-  const style = box ? boxEditorStyle(box, view) : arrowEditorStyle(geomById.get(arrow!.id), lineCount, view);
+  const geom = arrow && geomById.get(arrow.id);
+  const style = box ? boxEditorStyle(box, view) : arrow && geom ? arrowEditorStyle(geom, arrow, value, view) : undefined;
 
   return (
     <textarea

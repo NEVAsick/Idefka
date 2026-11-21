@@ -95,6 +95,7 @@ function repairDiagram(diagram: Raw, id: string): Diagram {
   }
   diagram.boxes = objects(diagram.boxes).map(repairBox);
   diagram.arrows = objects(diagram.arrows).map(repairArrow);
+  if (diagram.tunneledArrows !== undefined) diagram.tunneledArrows = objects(diagram.tunneledArrows).map(repairArrow);
   return diagram as Diagram;
 }
 
@@ -162,6 +163,7 @@ export function parseModel(content: string): Model {
   if (raw.version < 2) addNotationToDiagrams(raw);
   if (raw.version < 3) splitRootByNotation(raw);
   if (raw.version < 6) migrateToVersion6(raw);
+  // До версии 7 скрытые туннелем стрелки не сохранялись. Для таких файлов список пуст.
   addMissingRoots(raw);
   repair(raw);
   raw.version = VERSION;

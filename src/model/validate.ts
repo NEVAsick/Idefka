@@ -1,5 +1,5 @@
 import type { Arrow, Box, Diagram, Endpoint, Model, NodeKind, Notation } from './types';
-import { boxNumber, diagramOrder, labelOf, nodeOf } from './query';
+import { boxNumber, CONTEXT_ROLE_HINT, contextArrowRoles, diagramOrder, labelOf, nodeOf } from './query';
 import { KINDS } from './notation';
 
 export interface Issue {
@@ -58,8 +58,10 @@ function checkDfd({ model, diagram, node, report }: Check) {
     const number = boxNumber(model, diagram.id, box.id) || box.name;
     if (!box.name.trim()) report('box', box.id, `${node}: у элемента ${number} нет названия`);
     if (box.kind === 'process') {
-      if (!into(diagram, box).length) report('box', box.id, `${number}: у процесса нет входящих потоков`);
-      if (!outOf(diagram, box).length) report('box', box.id, `${number}: у процесса нет исходящих потоков`);
+      const incoming = into(diagram, box);
+      const outgoing = outOf(diagram, box);
+      if (!incoming.length && !outgoing.some((a) => a.bidir)) report('box', box.id, `${number}: у процесса нет входящих потоков`);
+      if (!outgoing.length && !incoming.some((a) => a.bidir)) report('box', box.id, `${number}: у процесса нет исходящих потоков`);
     }
     if (box.kind === 'store' && !into(diagram, box).length && !outOf(diagram, box).length) {
       report('box', box.id, `${number}: хранилище ни с чем не связано`);
@@ -255,9 +257,11 @@ const CHECKS: Record<Notation, (check: Check) => void> = {
 
 function checkArrows({ model, diagram, node, report }: Check) {
   const needsName = diagram.notation === 'idef0' || diagram.notation === 'dfd';
+  const roles = contextArrowRoles(diagram);
   for (const arrow of diagram.arrows) {
     const name = labelOf(model, arrow).trim();
     const display = name ? `«${name}»` : 'Стрелка без названия';
+    if (roles.get(arrow.id) === 'conflict') report('arrow', arrow.id, `${display} — конфликт ролей. ${CONTEXT_ROLE_HINT}`);
     if (needsName && !name) report('arrow', arrow.id, `${node}: у стрелки нет названия`);
     if (arrow.from.t === 'free' || arrow.to.t === 'free') report('arrow', arrow.id, `${node}: ${display} не подключена одним концом`);
     const isBoundary = arrow.from.t === 'border' || arrow.to.t === 'border';

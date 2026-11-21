@@ -1,4 +1,4 @@
-import type { Arrow, Diagram, Model, NodeKind, Notation, Side } from './types';
+import type { Arrow, Diagram, Endpoint, Model, NodeKind, Notation, Side } from './types';
 import { NOTATION_LIST } from './notation';
 
 const NUMBERED: NodeKind[] = ['activity', 'process', 'uow', 'task', 'epcFunction', 'action'];
@@ -120,7 +120,60 @@ export type Role = 'I' | 'C' | 'O' | 'M';
 
 export const ROLE_BY_SIDE: Record<Side, Role> = { left: 'I', top: 'C', right: 'O', bottom: 'M' };
 
-export function arrowRole(arrow: Arrow): Role {
+export const CONTEXT_ROLE_HINT = 'На A-0 вход соединяется слева, управление сверху, механизм снизу, выход справа. У рамки и работы роль стрелки должна совпадать, в том числе у ветвей.';
+
+export function contextEndDirection(end: Extract<Endpoint, { t: 'box' | 'border' }>): 'from' | 'to' {
+  const source = end.t === 'box' ? end.side === 'right' : end.side !== 'right';
+  return source ? 'from' : 'to';
+}
+
+// На A-0 каждая связанная группа стрелок (с учётом ветвей и слияний) несёт одну роль ICOM.
+export function contextArrowRoles(diagram: Diagram, proposed?: Arrow): Map<string, Role | 'conflict'> {
+  const roles = new Map<string, Role | 'conflict'>();
+  if (!isContext(diagram)) return roles;
+  const arrows = new Map(diagram.arrows.map((a) => [a.id, a]));
+  if (proposed) arrows.set(proposed.id, proposed);
+
+  const branches = new Map<string, Arrow[]>();
+  for (const arrow of arrows.values()) {
+    for (const end of [arrow.from, arrow.to]) {
+      if (end.t !== 'tap') continue;
+      const list = branches.get(end.arrow);
+      if (list) list.push(arrow);
+      else branches.set(end.arrow, [arrow]);
+    }
+  }
+
+  const seen = new Set<string>();
+  for (const first of arrows.values()) {
+    if (seen.has(first.id)) continue;
+    const pending = [first];
+    const group: Arrow[] = [];
+    let role: Role | 'conflict' | undefined;
+    while (pending.length) {
+      const arrow = pending.pop()!;
+      if (seen.has(arrow.id)) continue;
+      seen.add(arrow.id);
+      group.push(arrow);
+      for (const branch of branches.get(arrow.id) ?? []) pending.push(branch);
+      for (const direction of ['from', 'to'] as const) {
+        const end = arrow[direction];
+        if (end.t === 'tap') {
+          const trunk = arrows.get(end.arrow);
+          if (trunk) pending.push(trunk);
+        } else if (end.t !== 'free') {
+          const atEnd = ROLE_BY_SIDE[end.side];
+          role = contextEndDirection(end) !== direction || (role && role !== atEnd) ? 'conflict' : atEnd;
+        }
+      }
+    }
+    if (role) for (const arrow of group) roles.set(arrow.id, role);
+  }
+  return roles;
+}
+
+export function arrowRole(arrow: Arrow, contextRole?: Role | 'conflict'): Role {
+  if (contextRole && contextRole !== 'conflict') return contextRole;
   if (arrow.to.t === 'box') return ROLE_BY_SIDE[arrow.to.side];
   if (arrow.from.t === 'border') return ROLE_BY_SIDE[arrow.from.side];
   return 'O';

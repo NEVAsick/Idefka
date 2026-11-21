@@ -2,7 +2,7 @@ import type { Arrow, Box, Diagram, Endpoint, LinkKind, Model, NodeKind, Notation
 import { FORMAT, VERSION } from './types';
 import { AREA, snap, snapBox } from './sheet';
 import { borderPoint, computeAnchors, type Anchors } from './geometry';
-import { invalidateIndex, isContext, labelOf } from './query';
+import { diagramOrder, invalidateIndex, isContext, labelOf } from './query';
 import { isContainer, isLifeline, KINDS, lifelineHead, NOTATIONS, NOTATION_LIST } from './notation';
 
 let counter = 0;
@@ -306,7 +306,7 @@ function branchesOf(diagram: Diagram, roots: Set<string>): Set<string> {
   for (let grew = true; grew; ) {
     grew = false;
     for (const arrow of diagram.arrows) {
-      if (found.has(arrow.id) || arrow.parent || !(tapsFound(arrow.from) || tapsFound(arrow.to))) continue;
+      if (found.has(arrow.id) || !(tapsFound(arrow.from) || tapsFound(arrow.to))) continue;
       found.add(arrow.id);
       grew = true;
     }
@@ -327,7 +327,6 @@ export function deleteItems(model: Model, diagramId: string, boxIds: string[], a
   }
 
   const removedArrows = new Set<string>();
-  const tunneled = new Set<string>();
   const tunneledNames: string[] = [];
   for (const id of arrowIds) {
     const arrow = diagram.arrows.find((a) => a.id === id);
@@ -339,14 +338,12 @@ export function deleteItems(model: Model, diagramId: string, boxIds: string[], a
     const parentArrow = diagram.parent && model.diagrams[diagram.parent.diagram]?.arrows.find((a) => a.id === arrow.parent);
     if (diagram.notation === 'idef0' && parentArrow) {
       parentArrow.tunnel = true;
-      tunneled.add(id);
       tunneledNames.push(labelOf(model, parentArrow).trim());
     } else {
       warning = 'Граничная стрелка приходит с родительской диаграммы — удалите её там.';
     }
   }
   if (tunneledNames.length) {
-    for (const branch of branchesOf(diagram, tunneled)) removedArrows.add(branch);
     const named = tunneledNames.filter(Boolean).map((name) => `«${name}»`);
     const what = tunneledNames.length > 1 ? 'Стрелки убраны' : named.length ? `Стрелка ${named[0]} убрана` : 'Стрелка убрана';
     warning = `${what} в туннель: на родительской диаграмме у блока появились скобки. Вернуть — Ctrl+Z или снять «В туннель» у стрелки на родительской диаграмме.`;
@@ -392,11 +389,8 @@ function borderEndFor(box: Box, side: Side, anchor: Pt | undefined): BorderEnd {
 function syncChildBoundaries(model: Model, diagram: Diagram, box: Box, getAnchors: () => Anchors) {
   const child = model.diagrams[box.child!];
   const touchesBox = (a: Arrow) => (a.to.t === 'box' && a.to.box === box.id) || (a.from.t === 'box' && a.from.box === box.id);
-  const touching = diagram.arrows.filter((a) => !a.tunnel && touchesBox(a));
+  const touching = diagram.arrows.filter(touchesBox);
   const touchingIds = new Set(touching.map((a) => a.id));
-  const tunneled = new Set(diagram.arrows.filter((a) => a.tunnel).map((a) => a.id));
-
-  child.arrows = child.arrows.filter((a) => !(a.parent && tunneled.has(a.parent) && (a.from.t === 'free' || a.to.t === 'free')));
   for (const arrow of child.arrows) if (arrow.parent && !touchingIds.has(arrow.parent)) delete arrow.parent;
 
   for (const parentArrow of touching) {
@@ -404,6 +398,7 @@ function syncChildBoundaries(model: Model, diagram: Diagram, box: Box, getAnchor
     const side: Side = !incoming ? 'right' : diagram.notation === 'idef0' && parentArrow.to.t === 'box' ? parentArrow.to.side : 'left';
 
     let childArrow = child.arrows.find((a) => a.parent === parentArrow.id);
+    if (parentArrow.tunnel && !childArrow) continue;
     const childBorderEnd = childArrow && (incoming ? childArrow.from : childArrow.to);
     if (childBorderEnd?.t === 'border' && childBorderEnd.side === side) continue;
 
@@ -450,12 +445,37 @@ function detachMissingEnds(diagram: Diagram) {
   }
 }
 
+function hideTunneledArrows(model: Model) {
+  // Родитель обрабатывается первым: его скрытая стрелка скрывает и своё продолжение ниже.
+  for (const id of diagramOrder(model, 'idef0')) {
+    const diagram = model.diagrams[id];
+    if (!diagram.parent) continue;
+    const parent = model.diagrams[diagram.parent.diagram];
+    const hiddenParents = new Set(parent.arrows.filter((a) => a.tunnel).map((a) => a.id));
+    for (const arrow of parent.tunneledArrows ?? []) hiddenParents.add(arrow.id);
+    if (!hiddenParents.size) continue;
+    const roots = diagram.arrows.filter((a) => a.parent && hiddenParents.has(a.parent));
+    if (!roots.length) continue;
+    const hidden = branchesOf(diagram, new Set(roots.map((a) => a.id)));
+    diagram.tunneledArrows = diagram.arrows.filter((a) => hidden.has(a.id));
+    diagram.arrows = diagram.arrows.filter((a) => !hidden.has(a.id));
+  }
+}
+
 export function normalize(model: Model) {
+  let hasTunnels = false;
   for (const diagram of Object.values(model.diagrams)) {
+    // Ссылки и декомпозицию проверяем по полной модели, включая скрытые ветви.
+    if (diagram.tunneledArrows) {
+      diagram.arrows = diagram.arrows.concat(diagram.tunneledArrows);
+      delete diagram.tunneledArrows;
+    }
+    if (diagram.notation === 'idef0' && diagram.arrows.some((a) => a.tunnel)) hasTunnels = true;
     for (const box of diagram.boxes) if (box.child && !model.diagrams[box.child]) delete box.child;
     detachMissingEnds(diagram);
   }
   invalidateIndex(model);
   syncBoundaries(model);
+  if (hasTunnels) hideTunneledArrows(model);
   invalidateIndex(model);
 }

@@ -1,5 +1,5 @@
 import type { Arrow, Card, Diagram, Endpoint, LinkKind, Model, Notation, Side } from '../../model/types';
-import { arrowRole, boxNumber, labelInherited, labelOf, labelOwner, ROLE_NAME } from '../../model/query';
+import { arrowRole, boxNumber, contextArrowRoles, labelInherited, labelOf, labelOwner, ROLE_NAME } from '../../model/query';
 import { uid } from '../../model/ops';
 import { computeGeometry, type ArrowGeom } from '../../model/geometry';
 import { projectOnPath } from '../../model/path';
@@ -170,8 +170,9 @@ function ArrowActions({ model, diagramId, arrow, branching, edit }: { model: Mod
   const pinnedBorder = (arrow.from.t === 'border' && arrow.from.fixed) || (arrow.to.t === 'border' && arrow.to.fixed);
   const labelMoved = !!(arrow.labelDx || arrow.labelDy);
 
-  const unpinBorders = () =>
+  const straightenArrow = () =>
     edit((a) => {
+      delete a.route;
       if (a.from.t === 'border') delete a.from.fixed;
       if (a.to.t === 'border') delete a.to.fixed;
     });
@@ -195,13 +196,21 @@ function ArrowActions({ model, diagramId, arrow, branching, edit }: { model: Mod
         </button>
       )}
       {pinnedBorder && (
-        <button className="btn" onClick={unpinBorders}>
+        <button className="btn" onClick={straightenArrow}>
           Выпрямить стрелку
         </button>
       )}
       {labelMoved && (
         <button className="btn" onClick={resetLabel}>
           Вернуть подпись на место
+        </button>
+      )}
+      {(arrow.labelWidth !== undefined || arrow.labelHeight !== undefined) && (
+        <button className="btn" onClick={() => edit((a) => {
+          delete a.labelWidth;
+          delete a.labelHeight;
+        })}>
+          Подобрать размер подписи по тексту
         </button>
       )}
       {!arrow.parent && (
@@ -229,7 +238,7 @@ export function ArrowPanel({ model, diagramId, arrow }: { model: Model; diagramI
   const g = computeGeometry(model, diagram).find((x) => x.id === arrow.id);
   const tunnel = tunnelInfo(diagram, arrow);
   const title = notation === 'idef3' || notation === 'bpmn' ? 'Связь' : NOTATIONS[notation].linkWord;
-  const role = arrowRole(arrow);
+  const role = arrowRole(arrow, contextArrowRoles(diagram).get(arrow.id));
 
   const edit: EditArrow = (change, key) => editArrow(diagramId, arrow.id, change, key && `${key}-${arrow.id}`);
   const editOwner = (field: 'label' | 'note', value: string) =>

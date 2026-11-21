@@ -6,7 +6,7 @@ import { projectOnPath } from '../../model/path';
 import { AREA, GRID, SHEET_H, SHEET_W } from '../../model/sheet';
 import type { Diagram, Endpoint, Pt, Side } from '../../model/types';
 import { addBox } from '../../model/ops';
-import { dependents, isContext } from '../../model/query';
+import { contextEndDirection, dependents, isContext } from '../../model/query';
 import { connectable, isLifeline, KINDS, lifelineHead } from '../../model/notation';
 import { canBranch } from '../../model/links';
 import { decomposeSelected, openDiagram } from '../../actions';
@@ -25,7 +25,9 @@ import {
   newMessage,
   reconnectEnd,
   resizeBox,
+  resizeLabel,
   selectInMarquee,
+  startContextReconnect,
   startMove,
   startSegmentDrag,
   withPreviewEnd,
@@ -76,6 +78,7 @@ function placeNode(at: Pt) {
 }
 
 function cursorFor(gesture: Gesture | null, space: boolean, tool: Tool) {
+  if (gesture?.kind === 'new-arrow' && gesture.invalidRole) return 'not-allowed';
   if (gesture?.kind === 'pan') return 'grabbing';
   if (space || tool === 'hand') return 'grab';
   if (tool === 'node') return 'copy';
@@ -100,7 +103,11 @@ export function Canvas() {
 
   const drawing = gesture?.kind === 'new-arrow' && gesture.moved ? gesture : null;
   const baseGeom = useMemo(() => computeGeometry(model, diagram), [model, diagram]);
-  const shown = useMemo<Diagram>(() => (drawing ? { ...diagram, arrows: [...diagram.arrows, drawing.arrow] } : diagram), [diagram, drawing]);
+  const shown = useMemo<Diagram>(() => {
+    if (!drawing) return diagram;
+    const arrows = drawing.reconnect ? diagram.arrows.map((a) => a.id === drawing.arrow.id ? drawing.arrow : a) : [...diagram.arrows, drawing.arrow];
+    return { ...diagram, arrows };
+  }, [diagram, drawing]);
   const geom = useMemo(() => (shown === diagram ? baseGeom : computeGeometry(model, shown)), [model, shown, diagram, baseGeom]);
   const geomById = useMemo(() => new Map(geom.map((g) => [g.id, g])), [geom]);
   const geomRef = useRef(baseGeom);
@@ -171,6 +178,7 @@ export function Canvas() {
     }
 
     if (tool === 'arrow' && box && connectable(box.kind)) {
+      if (isContext(current)) return startFromHandle(current, box.id, nearestSide(box, at), at);
       const side: Side = current.notation === 'idef0' ? 'right' : nearestSide(box, at);
       setGesture(newArrowFrom({ t: 'box', box: boxId, side }, at, boxId));
       return;
@@ -184,8 +192,13 @@ export function Canvas() {
   };
 
   const startFreeArrow = (at: Pt) => {
-    const from = resolveEnd(hitContext(), 'from', at, undefined, new Set());
+    const context = hitContext();
+    const from = resolveEnd(context, 'from', at, undefined, new Set());
     const exclude = from.t === 'box' ? from.box : undefined;
+    if (isContext(context.diagram) && (from.t === 'box' || from.t === 'border') && contextEndDirection(from) === 'to') {
+      setGesture(newArrowTo(from, at, exclude));
+      return;
+    }
     const skipArrows = from.t === 'tap' ? new Set([from.arrow]) : undefined;
     setGesture(newArrowFrom(from, at, exclude, skipArrows));
   };
@@ -220,12 +233,22 @@ export function Canvas() {
       setGesture({ kind: 'resize', boxId: id, start: at, width: box.w, height: box.h, moved: false });
       return;
     }
+    if (kind === 'label-resize') {
+      const geometry = geomById.get(id);
+      if (geometry) setGesture({ kind: 'label-resize', geometry, start: at, moved: false });
+      return;
+    }
     if (kind === 'handle') return startFromHandle(current, id, target!.getAttribute('data-side') as Side, at);
     if (state.tool === 'node') {
       e.preventDefault();
       return placeNode(at);
     }
-    if (kind === 'end') return setGesture({ kind: 'reconnect', arrowId: id, end: target!.getAttribute('data-end') as End, moved: false });
+    if (kind === 'end') {
+      const end = target!.getAttribute('data-end') as End;
+      const arrow = current.arrows.find((a) => a.id === id);
+      if (arrow && isContext(current)) return setGesture(startContextReconnect(current, arrow, end, at));
+      return setGesture({ kind: 'reconnect', arrowId: id, end, moved: false });
+    }
     if (kind === 'label') return pressLabel(current, id, at);
     if (kind === 'arrow') return pressArrow(e, current, id, at);
     if (kind === 'box') return pressBox(e, current, id, at);
@@ -269,6 +292,7 @@ export function Canvas() {
         if (!segment) return;
         beginGesture();
         setGesture(segment);
+        dragSegment(segment, delta, zoom);
         break;
       }
 
@@ -303,7 +327,7 @@ export function Canvas() {
         break;
 
       case 'new-arrow':
-        setGesture(withPreviewEnd(active, current, at, hitContext(), far));
+        setGesture(withPreviewEnd(active, at, hitContext(), far));
         break;
 
       case 'reconnect': {
@@ -316,6 +340,10 @@ export function Canvas() {
 
       case 'label':
         if (dragStarted(active, far)) moveLabel(active, delta);
+        break;
+
+      case 'label-resize':
+        if (dragStarted(active, far)) resizeLabel(active.geometry, delta);
         break;
 
       case 'marquee':
@@ -337,6 +365,7 @@ export function Canvas() {
       case 'resize':
       case 'reconnect':
       case 'label':
+      case 'label-resize':
       case 'message-move':
         if (active.moved) endGesture();
         break;
@@ -348,7 +377,7 @@ export function Canvas() {
 
       case 'new-arrow':
         if (active.moved) finishNewArrow(active, current, toWorld(e.clientX, e.clientY), hitContext());
-        else selectArrowUnder(e.clientX, e.clientY);
+        else if (!active.reconnect) selectArrowUnder(e.clientX, e.clientY);
         break;
 
       case 'marquee':

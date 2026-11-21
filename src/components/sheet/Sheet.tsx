@@ -1,6 +1,6 @@
 import type { Arrow, Box, Diagram, Endpoint, Model, Pt } from '../../model/types';
 import { AREA, DIAGRAM_FONT, INK, PAPER, SHEET_H, SHEET_W } from '../../model/sheet';
-import { LABEL_LH, LABEL_SIZE, type ArrowGeom } from '../../model/geometry';
+import type { ArrowGeom } from '../../model/geometry';
 import { nearestOnRect, projectOnPath, squigglePoints, type Bounds } from '../../model/path';
 import { isContainer, isLifeline } from '../../model/notation';
 import { wrap } from '../../model/text';
@@ -52,7 +52,7 @@ function ArrowLabel({ geom: g, color, interactive }: { geom: ArrowGeom; color: s
       data-id={interactive ? g.id : undefined}
       x={g.labelAt.x}
       y={g.labelAt.y}
-      fontSize={g.fontSize ?? LABEL_SIZE}
+      fontSize={g.fontSize}
       fontFamily={DIAGRAM_FONT}
       fill={color}
       textAnchor={g.labelAnchor}
@@ -63,7 +63,7 @@ function ArrowLabel({ geom: g, color, interactive }: { geom: ArrowGeom; color: s
       style={interactive ? { cursor: 'move' } : undefined}
     >
       {g.lines.map((line, i) => (
-        <tspan key={i} x={g.labelAt.x} y={g.labelAt.y + i * LABEL_LH}>
+        <tspan key={i} x={g.labelAt.x} y={g.labelAt.y + i * g.lineHeight}>
           {line}
         </tspan>
       ))}

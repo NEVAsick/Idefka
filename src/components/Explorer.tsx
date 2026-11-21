@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { select, useStore, type Selection } from '../store';
 import type { Arrow, Box, Diagram, Model, NodeKind } from '../model/types';
-import { arrowRole, boxNumber, labelOf, rootOf, ROLE_NAME } from '../model/query';
+import { arrowRole, boxNumber, contextArrowRoles, labelOf, rootOf, ROLE_NAME } from '../model/query';
 import { openDiagram } from '../actions';
 import { Icon, KindIcon } from './icons';
 import { KINDS, NOTATIONS } from '../model/notation';
@@ -81,9 +81,10 @@ function ArrowRow({ model, arrow, selected }: { model: Model; arrow: Arrow; sele
 }
 
 function ArrowList({ model, diagram, sel }: { model: Model; diagram: Diagram; sel: Selection }) {
+  const roles = contextArrowRoles(diagram);
   const groups =
     diagram.notation === 'idef0'
-      ? ICOM_GROUPS.map((role) => ({ role, title: ROLE_NAME[role] as string | null, arrows: diagram.arrows.filter((a) => arrowRole(a) === role) }))
+      ? ICOM_GROUPS.map((role) => ({ role, title: ROLE_NAME[role] as string | null, arrows: diagram.arrows.filter((a) => arrowRole(a, roles.get(a.id)) === role) }))
       : [{ role: '*', title: null, arrows: diagram.arrows }];
 
   return (

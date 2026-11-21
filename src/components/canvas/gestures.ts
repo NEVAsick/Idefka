@@ -1,13 +1,14 @@
 import type { Arrow, Box, Diagram, Endpoint, Pt } from '../../model/types';
-import type { ArrowGeom } from '../../model/geometry';
+import { computeAnchors, layoutArrowLabel, type ArrowGeom } from '../../model/geometry';
 import { projectOnPath } from '../../model/path';
 import { removeJogs } from '../../model/router';
 import { AREA, GRID, snap, snapBox } from '../../model/sheet';
 import { clamp, uid } from '../../model/ops';
 import { carriesContent, isContainer, isLifeline, KINDS, lifelineHead } from '../../model/notation';
 import { defaultLink } from '../../model/links';
+import { CONTEXT_ROLE_HINT, contextArrowRoles, dependents } from '../../model/query';
 import { commit, getState, live, select, setState, toast } from '../../store';
-import { carries, lifelineOf, resolveEnd, resolveMessageEnd, type End, type HitContext } from './hitTest';
+import { borderEndAt, carries, lifelineOf, resolveEnd, resolveMessageEnd, type End, type HitContext } from './hitTest';
 
 export type Gesture =
   | { kind: 'pan'; startX: number; startY: number; viewX: number; viewY: number }
@@ -15,9 +16,10 @@ export type Gesture =
   | { kind: 'resize'; boxId: string; start: Pt; width: number; height: number; moved: boolean }
   | { kind: 'arrow-press'; arrowId: string; start: Pt }
   | { kind: 'segment'; arrowId: string; points: Pt[]; index: number; horizontal: boolean; start: Pt }
-  | { kind: 'new-arrow'; role: End; arrow: Arrow; exclude?: string; skipArrows: Set<string>; start: Pt; moved: boolean; message?: boolean }
+  | { kind: 'new-arrow'; role: End; arrow: Arrow; exclude?: string; skipArrows: Set<string>; start: Pt; moved: boolean; message?: boolean; reconnect?: boolean; invalidRole?: boolean }
   | { kind: 'reconnect'; arrowId: string; end: End; moved: boolean }
   | { kind: 'label'; arrowId: string; start: Pt; dx: number; dy: number; moved: boolean }
+  | { kind: 'label-resize'; geometry: ArrowGeom; start: Pt; moved: boolean }
   | { kind: 'message-move'; arrowId: string; startY: number; start: Pt; moved: boolean }
   | { kind: 'activation-press'; boxId: string; start: Pt }
   | { kind: 'marquee'; start: Pt; current: Pt; additive: boolean };
@@ -27,7 +29,7 @@ type MoveGesture = Extract<Gesture, { kind: 'move' }>;
 
 const NO_ARROWS = new Set<string>();
 
-const draftArrow = (from: Endpoint, to: Endpoint): Arrow => ({ id: 'draft', label: '', note: '', from, to });
+const draftArrow = (from: Endpoint, to: Endpoint): Arrow => ({ id: uid('a'), label: '', note: '', from, to });
 
 const currentDiagram = (draft: { diagrams: Record<string, Diagram> }) => draft.diagrams[getState().diagramId];
 const findArrow = (diagram: Diagram, id: string) => diagram.arrows.find((a) => a.id === id);
@@ -46,14 +48,27 @@ export function newMessage(lifeline: Box, start: Pt, pointer: Pt, moved = false)
   return { kind: 'new-arrow', role: 'to', skipArrows: NO_ARROWS, start, moved, arrow, message: true };
 }
 
-export function withPreviewEnd(gesture: NewArrowGesture, diagram: Diagram, point: Pt, context: HitContext, far: boolean): NewArrowGesture {
-  const messageY = gesture.arrow.seqY!;
-  const end = gesture.message
-    ? resolveMessageEnd(diagram, point, messageY)
-    : resolveEnd(context, gesture.role, point, gesture.exclude, gesture.skipArrows);
-  const arrow: Arrow = { ...gesture.arrow };
-  arrow[gesture.role] = end.t === 'free' ? { t: 'free', x: point.x, y: gesture.message ? messageY : point.y } : end;
-  return { ...gesture, moved: gesture.moved || far, arrow };
+export function startContextReconnect(diagram: Diagram, arrow: Arrow, role: End, start: Pt): NewArrowGesture {
+  return { kind: 'new-arrow', role, arrow: { ...arrow, route: undefined }, start, skipArrows: dependents(diagram, arrow.id), moved: false, reconnect: true };
+}
+
+function arrowAtPointer(gesture: NewArrowGesture, point: Pt, context: HitContext) {
+  const { arrow, role, skipArrows } = gesture;
+  let end: Endpoint;
+  if (gesture.message) end = resolveMessageEnd(context.diagram, point, arrow.seqY!);
+  else if (gesture.reconnect) end = reconnectedEnd(arrow, role, point, context, skipArrows);
+  else end = resolveEnd(context, role, point, gesture.exclude, skipArrows);
+  const candidate: Arrow = { ...arrow, [role]: end };
+  // Старую схему с несколькими конфликтами можно исправлять, отсоединяя по одному концу.
+  const detaching = gesture.reconnect && end.t === 'free';
+  const invalidRole = !detaching && contextArrowRoles(context.diagram, candidate).get(candidate.id) === 'conflict';
+  return { arrow: candidate, invalidRole };
+}
+
+export function withPreviewEnd(gesture: NewArrowGesture, point: Pt, context: HitContext, far: boolean): NewArrowGesture {
+  const { arrow, invalidRole } = arrowAtPointer(gesture, point, context);
+  if (invalidRole || arrow[gesture.role].t === 'free') arrow[gesture.role] = { t: 'free', x: point.x, y: gesture.message ? arrow.seqY! : point.y };
+  return { ...gesture, moved: gesture.moved || far, arrow, invalidRole };
 }
 
 export function startMove(diagram: Diagram, selectedIds: string[], start: Pt): MoveGesture {
@@ -156,7 +171,7 @@ function stubPoint(from: Pt, toward: Pt): Pt {
   return { x: Math.round(from.x + (toward.x - from.x) * t), y: Math.round(from.y + (toward.y - from.y) * t) };
 }
 
-export function startSegmentDrag(arrowId: string, path: Pt[], at: Pt): Gesture | null {
+export function startSegmentDrag(arrowId: string, path: Pt[], at: Pt): Extract<Gesture, { kind: 'segment' }> | null {
   if (path.length < 2) return null;
 
   let index = 0;
@@ -253,31 +268,59 @@ export function moveLabel(gesture: Extract<Gesture, { kind: 'label' }>, delta: P
   });
 }
 
-export function reconnectEnd(gesture: Extract<Gesture, { kind: 'reconnect' }>, diagram: Diagram, point: Pt, context: HitContext, dependents: Set<string>) {
-  const arrow = findArrow(diagram, gesture.arrowId);
-  if (!arrow) return;
+export function resizeLabel(geometry: ArrowGeom, delta: Pt) {
+  const { labelBox, id, points, label } = geometry;
+  live((draft) => {
+    const arrow = findArrow(currentDiagram(draft), id);
+    if (!arrow) return false;
+    arrow.labelWidth = Math.max(1, labelBox.x2 - labelBox.x1 + delta.x);
+    arrow.labelHeight = Math.max(1, labelBox.y2 - labelBox.y1 + delta.y);
+    // Угол напротив маркера остаётся на месте даже при переносе строк и смене выравнивания.
+    const layout = layoutArrowLabel(points, label, { ...arrow, labelDx: 0, labelDy: 0 });
+    arrow.labelDx = labelBox.x1 - layout.labelBox.x1;
+    arrow.labelDy = labelBox.y1 - layout.labelBox.y1;
+  });
+}
 
-  const other = gesture.end === 'from' ? arrow.to : arrow.from;
+function reconnectedEnd(arrow: Arrow, role: End, point: Pt, context: HitContext, skipArrows: Set<string>): Endpoint {
+  const diagram = context.diagram;
+  const otherRole = role === 'from' ? 'to' : 'from';
+  const other = arrow[otherRole];
   let end =
     arrow.seqY !== undefined
       ? resolveMessageEnd(diagram, point, arrow.seqY)
-      : resolveEnd(context, gesture.end, point, other.t === 'box' ? other.box : undefined, dependents);
+      : resolveEnd(context, role, point, other.t === 'box' ? other.box : undefined, skipArrows);
 
-  const current = arrow[gesture.end];
+  const current = arrow[role];
   if (arrow.parent && current.t === 'border') {
     const vertical = current.side === 'left' || current.side === 'right';
     const along = vertical ? point.y : point.x;
-    const [min, max] = vertical ? [AREA.y + 12, AREA.y + AREA.h - 12] : [AREA.x + 12, AREA.x + AREA.w - 12];
-    end = { t: 'border', side: current.side, at: clamp(snap(along), min, max) };
+    end = borderEndAt(current.side, snap(along));
   }
-  if (end.t === 'border') end = { ...end, fixed: true };
+  if (end.t !== 'border') return end;
+  let at = end.at;
+  if (other.t === 'box' && other.side === end.side) {
+    // Перестановка двух стрелок на рамке может поменять их порты на блоке.
+    const arrows = diagram.arrows.map((a) => a.id === arrow.id ? { ...a, [role]: end } : a);
+    const port = computeAnchors(getState().model, { ...diagram, arrows }).get(arrow.id)?.[otherRole];
+    const axis = end.side === 'left' || end.side === 'right' ? 'y' : 'x';
+    if (port && Math.abs(port[axis] - point[axis]) <= GRID) at = port[axis];
+  }
+  return { ...borderEndAt(end.side, at), fixed: true };
+}
 
-  live((draft) => {
-    const target = findArrow(currentDiagram(draft), gesture.arrowId);
-    if (!target) return false;
-    target[gesture.end] = end;
-    delete target.route;
-  });
+function replaceEnd(diagram: Diagram, id: string, role: End, end: Endpoint) {
+  const target = findArrow(diagram, id);
+  if (!target) return false;
+  target[role] = end;
+  delete target.route;
+}
+
+export function reconnectEnd(gesture: Extract<Gesture, { kind: 'reconnect' }>, diagram: Diagram, point: Pt, context: HitContext, skipArrows: Set<string>) {
+  const arrow = findArrow(diagram, gesture.arrowId);
+  if (!arrow) return;
+  const end = reconnectedEnd(arrow, gesture.end, point, context, skipArrows);
+  live((draft) => replaceEnd(currentDiagram(draft), arrow.id, gesture.end, end));
 }
 
 function addMessage(diagram: Diagram, gesture: NewArrowGesture, point: Pt) {
@@ -327,25 +370,27 @@ export function finishNewArrow(gesture: NewArrowGesture, diagram: Diagram, point
     return;
   }
 
-  const arrow: Arrow = { ...gesture.arrow };
-  arrow[gesture.role] = resolveEnd(context, gesture.role, point, gesture.exclude, gesture.skipArrows);
-  const problem = refusal(arrow);
+  const { arrow, invalidRole } = arrowAtPointer(gesture, point, context);
+  const problem = invalidRole ? CONTEXT_ROLE_HINT : refusal(arrow);
   if (problem) {
     toast(problem);
     return;
   }
 
-  const id = uid('a');
+  if (gesture.reconnect) {
+    commit((draft) => replaceEnd(currentDiagram(draft), arrow.id, gesture.role, arrow[gesture.role]));
+    return;
+  }
   const link = defaultLink(diagram, arrow);
   if (link) arrow.link = link;
   commit((draft) => {
-    currentDiagram(draft).arrows.push({ ...arrow, id });
+    currentDiagram(draft).arrows.push(arrow);
   });
-  select({ arrows: [id] });
+  select({ arrows: [arrow.id] });
 
   const branch = arrow.from.t === 'tap';
   const join = arrow.to.t === 'tap';
-  if (!arrow.label && !branch && !join && asksForLabel(diagram, arrow)) setState({ editing: { kind: 'arrow', id } });
+  if (!arrow.label && !branch && !join && asksForLabel(diagram, arrow)) setState({ editing: { kind: 'arrow', id: arrow.id } });
   if (branch) toast('Ветвь создана. Название берётся от основной стрелки — его можно изменить.');
   else if (join) toast('Стрелки слиты.');
 }

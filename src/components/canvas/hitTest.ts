@@ -3,6 +3,7 @@ import type { ArrowGeom } from '../../model/geometry';
 import { projectOnPath } from '../../model/path';
 import { AREA, snap } from '../../model/sheet';
 import { clamp } from '../../model/ops';
+import { isContext } from '../../model/query';
 import { connectable, isContainer, isLifeline, lifelineHead } from '../../model/notation';
 
 export type End = 'from' | 'to';
@@ -103,6 +104,13 @@ function arrowNear({ geom, zoom }: HitContext, p: Pt, skip: Set<string>): Endpoi
   return best && { t: 'tap', arrow: best.id, x: best.point.x, y: best.point.y };
 }
 
+export function borderEndAt(side: Side, coordinate: number): Extract<Endpoint, { t: 'border' }> {
+  const vertical = side === 'left' || side === 'right';
+  const start = vertical ? AREA.y : AREA.x;
+  const length = vertical ? AREA.h : AREA.w;
+  return { t: 'border', side, at: clamp(coordinate, start + 12, start + length - 12) };
+}
+
 function borderNear(p: Pt, allowed: Side[]): Endpoint | null {
   const right = AREA.x + AREA.w;
   const bottom = AREA.y + AREA.h;
@@ -120,15 +128,15 @@ function borderNear(p: Pt, allowed: Side[]): Endpoint | null {
   if (!nearest) return null;
 
   const side = nearest[0];
-  const at = side === 'left' || side === 'right' ? clamp(snap(p.y), AREA.y + 12, bottom - 12) : clamp(snap(p.x), AREA.x + 12, right - 12);
-  return { t: 'border', side, at };
+  return borderEndAt(side, snap(side === 'left' || side === 'right' ? p.y : p.x));
 }
 
 export function resolveEnd(context: HitContext, role: End, p: Pt, exclude: string | undefined, skipArrows: Set<string>): Endpoint {
   const idef0 = context.diagram.notation === 'idef0';
-  const box = hitBox(context.diagram, p, 8, exclude, true);
+  const contextDiagram = isContext(context.diagram);
+  const box = hitBox(context.diagram, p, contextDiagram ? Math.max(8, 16 / context.zoom) : 8, contextDiagram ? undefined : exclude, true);
   if (box) {
-    if (!idef0) return { t: 'box', box: box.id, side: nearestSide(box, p) };
+    if (!idef0 || contextDiagram) return { t: 'box', box: box.id, side: nearestSide(box, p) };
     if (role === 'from') return { t: 'box', box: box.id, side: 'right' };
     return { t: 'box', box: box.id, side: nearestSide(box, p, ['left', 'top', 'bottom']) };
   }
@@ -136,7 +144,7 @@ export function resolveEnd(context: HitContext, role: End, p: Pt, exclude: strin
   const tap = arrowNear(context, p, skipArrows);
   if (tap) return tap;
 
-  const borderSides: Side[] = !idef0 ? ['left', 'right', 'top', 'bottom'] : role === 'to' ? ['right'] : ['left', 'top', 'bottom'];
+  const borderSides: Side[] = !idef0 || contextDiagram ? ALL_SIDES : role === 'to' ? ['right'] : ['left', 'top', 'bottom'];
   return borderNear(p, borderSides) ?? { t: 'free', x: snap(p.x), y: snap(p.y) };
 }
 

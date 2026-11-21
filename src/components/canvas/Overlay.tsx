@@ -27,6 +27,7 @@ interface OverlayProps {
 export function Overlay({ diagram, geom, baseGeom, geomById, sel, tool, zoom, hover, gesture }: OverlayProps) {
   const selectedBoxes = new Set(sel.boxes);
   const selectedArrows = geom.filter((g) => sel.arrows.includes(g.id));
+  const selectedLabel = tool === 'select' && !sel.boxes.length && selectedArrows.length === 1 && selectedArrows[0].showLabel ? selectedArrows[0] : null;
   const single = sel.boxes.length === 1 && sel.arrows.length === 0 ? diagram.boxes.find((b) => b.id === sel.boxes[0]) : undefined;
   const handleOwners = [single?.id, hover].filter((id, i, all): id is string => !!id && all.lastIndexOf(id) === i);
   const showHandles = (tool === 'select' || tool === 'arrow') && (!gesture || gesture.kind === 'new-arrow');
@@ -75,6 +76,22 @@ export function Overlay({ diagram, geom, baseGeom, geomById, sel, tool, zoom, ho
           <path key={'h' + g.id} data-k="arrow" data-id={g.id} d={pathD(g.points)} fill="none" stroke="transparent" strokeWidth={hitWidth} style={{ cursor: 'move' }} />
         ))}
 
+      {tool === 'select' && geom.filter((g) => g.showLabel).map(({ id, labelBox: box }) => (
+        <rect
+          key={id}
+          data-k="label"
+          data-id={id}
+          x={box.x1}
+          y={box.y1}
+          width={box.x2 - box.x1}
+          height={box.y2 - box.y1}
+          fill="transparent"
+          stroke={id === selectedLabel?.id ? 'var(--accent)' : 'none'}
+          vectorEffect="non-scaling-stroke"
+          style={{ cursor: 'move' }}
+        />
+      ))}
+
       {showHandles &&
         handleOwners.map((id) => {
           const box = diagram.boxes.find((b) => b.id === id);
@@ -96,6 +113,21 @@ export function Overlay({ diagram, geom, baseGeom, geomById, sel, tool, zoom, ho
       )}
 
       {sel.arrows.length === 1 && <EndHandles geom={geomById.get(sel.arrows[0])} zoom={zoom} />}
+
+      {selectedLabel && (
+        <rect
+          data-k="label-resize"
+          data-id={selectedLabel.id}
+          x={selectedLabel.labelBox.x2 - 4 / zoom}
+          y={selectedLabel.labelBox.y2 - 4 / zoom}
+          width={8 / zoom}
+          height={8 / zoom}
+          className="resize-handle"
+          strokeWidth={1.5 / zoom}
+        >
+          <title>Потяните, чтобы изменить размер подписи</title>
+        </rect>
+      )}
 
       {dropTarget && <DropHighlight diagram={diagram} end={dropTarget} zoom={zoom} geom={baseGeom} />}
 

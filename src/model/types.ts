@@ -3,7 +3,7 @@
 // Метки «cloneapp» здесь и в ключах хранилища браузера остались от прежнего имени проекта:
 // если их сменить, старые файлы перестанут открываться, а черновики и настройки пропадут.
 export const FORMAT = 'cloneapp-model';
-export const VERSION = 6;
+export const VERSION = 7;
 
 export type Side = 'left' | 'top' | 'right' | 'bottom';
 
@@ -151,6 +151,7 @@ export interface Diagram {
   status: DiagramStatus;
   boxes: Box[];
   arrows: Arrow[];
+  tunneledArrows?: Arrow[];
 }
 
 export interface CostCenter {
