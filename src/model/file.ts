@@ -63,6 +63,7 @@ function repairBox(box: Raw, index: number): Box {
   box.x = isNumber(box.x) ? box.x : AREA.x + 40;
   box.y = isNumber(box.y) ? box.y : AREA.y + 40;
   if (box.child !== undefined && typeof box.child !== 'string') delete box.child;
+  if (box.fontSize !== undefined && (!isNumber(box.fontSize) || box.fontSize <= 0)) delete box.fontSize;
   return box as Box;
 }
 
@@ -74,6 +75,14 @@ function repairArrow(arrow: Raw, index: number): Arrow {
   arrow.to = repairEndpoint(arrow.to);
   if (arrow.parent !== undefined && typeof arrow.parent !== 'string') delete arrow.parent;
   if (arrow.route !== undefined && !(Array.isArray(arrow.route) && arrow.route.every((p: unknown) => isObject(p) && isNumber(p.x) && isNumber(p.y)))) delete arrow.route;
+  if (arrow.offsetFrom !== undefined && !isNumber(arrow.offsetFrom)) delete arrow.offsetFrom;
+  if (arrow.offsetTo !== undefined && !isNumber(arrow.offsetTo)) delete arrow.offsetTo;
+  if (arrow.labelAnchorRatio !== undefined && (!isNumber(arrow.labelAnchorRatio) || arrow.labelAnchorRatio < 0 || arrow.labelAnchorRatio > 1)) {
+    delete arrow.labelAnchorRatio;
+  }
+  if (arrow.fontSize !== undefined && (!isNumber(arrow.fontSize) || arrow.fontSize <= 0)) delete arrow.fontSize;
+  if (arrow.labelWidth !== undefined && (!isNumber(arrow.labelWidth) || arrow.labelWidth <= 0)) delete arrow.labelWidth;
+  if (arrow.labelHeight !== undefined && (!isNumber(arrow.labelHeight) || arrow.labelHeight <= 0)) delete arrow.labelHeight;
   return arrow as Arrow;
 }
 
@@ -152,6 +161,7 @@ export function parseModel(content: string): Model {
   // Сначала миграции по версиям, затем repair(): файл мог прийти из старой версии или быть поправлен руками.
   if (raw.version < 2) addNotationToDiagrams(raw);
   if (raw.version < 3) splitRootByNotation(raw);
+  if (raw.version < 6) migrateToVersion6(raw);
   addMissingRoots(raw);
   repair(raw);
   raw.version = VERSION;
@@ -159,4 +169,19 @@ export function parseModel(content: string): Model {
   const model = raw as Model;
   normalize(model);
   return model;
+}
+
+function migrateToVersion6(raw: RawModel) {
+  // Новые поля опциональные, поэтому миграция может быть пустой.
+  // Если хотите явно проставить дефолты для старых файлов — раскомментируйте:
+  /*
+  for (const diagram of Object.values<any>(raw.diagrams)) {
+    for (const box of objects(diagram.boxes)) {
+      if (box.fontSize === undefined) box.fontSize = 13;
+    }
+    for (const arrow of objects(diagram.arrows)) {
+      if (arrow.fontSize === undefined) arrow.fontSize = 11.5;
+    }
+  }
+  */
 }

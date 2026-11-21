@@ -29,6 +29,7 @@ export interface ArrowGeom {
   manual: boolean;
   tunnelAt?: { point: Pt; dir: Dir };
   icom?: { text: string; at: Pt; anchor: 'start' | 'end' };
+  fontSize?: number;
 }
 
 type End = 'from' | 'to';
@@ -465,6 +466,7 @@ export function computeGeometry(model: Model, diagram: Diagram): ArrowGeom[] {
       manual: !!manual,
       tunnelAt: tunnelMark(arrow, points, boxById),
       icom: code ? icomLabel(code, ends) : undefined,
+      fontSize: arrow.fontSize, // <-- НОВОЕ
     });
   }
 

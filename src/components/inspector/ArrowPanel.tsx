@@ -273,6 +273,16 @@ export function ArrowPanel({ model, diagramId, arrow }: { model: Model; diagramI
       {notation === 'erd' && <CardinalityFields arrow={arrow} edit={edit} />}
       <ColorPicker diagramId={diagramId} arrowIds={[arrow.id]} value={arrow.color} />
 
+      <Field label="Размер шрифта подписи">
+        <input
+          type="number"
+          min={8}
+          max={72}
+          value={arrow.fontSize ?? 11.5}
+          onChange={(e) => edit((a) => (a.fontSize = Number(e.target.value) || undefined))}
+        />
+      </Field>
+
       {g?.showLabel && (
         <Check checked={arrow.squiggle ?? g.labelFar} onChange={toggleSquiggle} title="Зигзаг от подписи к стрелке. Сам появляется, если отвести подпись от стрелки.">
           Молния от подписи к стрелке

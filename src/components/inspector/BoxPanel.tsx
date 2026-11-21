@@ -290,6 +290,16 @@ export function BoxPanel({ model, diagramId, box }: { model: Model; diagramId: s
 
       {box.kind === 'junction' ? <JunctionFields box={box} edit={edit} /> : <TextFields box={box} edit={edit} />}
 
+       <Field label="Размер шрифта">
+        <input
+          type="number"
+          min={8}
+          max={72}
+          value={box.fontSize ?? 13}
+          onChange={(e) => edit((b) => (b.fontSize = Number(e.target.value) || undefined))}
+        />
+      </Field>
+
       {box.kind === 'activity' && (
         <>
           <IcomStats box={box} arrows={diagram.arrows} />

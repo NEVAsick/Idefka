@@ -3,11 +3,12 @@
 // Метки «cloneapp» здесь и в ключах хранилища браузера остались от прежнего имени проекта:
 // если их сменить, старые файлы перестанут открываться, а черновики и настройки пропадут.
 export const FORMAT = 'cloneapp-model';
-export const VERSION = 5;
+export const VERSION = 6;
 
 export type Side = 'left' | 'top' | 'right' | 'bottom';
 
 export type Notation = 'idef0' | 'dfd' | 'idef3' | 'bpmn' | 'epc' | 'usecase' | 'class' | 'sequence' | 'activity' | 'deployment' | 'erd';
+
 
 type Idef0Kind = 'activity';
 type DfdKind = 'process' | 'external' | 'store';
@@ -72,7 +73,11 @@ export interface Box {
   costs?: Record<string, number>;
   frequency?: number;
   duration?: number;
+
+  // НОВОЕ: размер шрифта для текста внутри блока
+  fontSize?: number;
 }
+
 
 export type LinkKind =
   | 'precedence'
@@ -127,6 +132,14 @@ export interface Arrow {
   card0?: Card;
   card1?: Card;
   seqY?: number;
+
+  // НОВОЕ:
+  offsetFrom?: number;      // смещение точки входа в блок (from)
+  offsetTo?: number;        // смещение точки выхода из блока (to)
+  labelAnchorRatio?: number; // 0..1 — где на стрелке цепляется "молния"
+  fontSize?: number;         // размер шрифта подписи
+  labelWidth?: number;       // фиксированная ширина плашки
+  labelHeight?: number;      // фиксированная высота плашки
 }
 
 export type DiagramStatus = 'working' | 'draft' | 'recommended' | 'publication';

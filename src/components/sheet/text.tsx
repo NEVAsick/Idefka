@@ -39,13 +39,14 @@ function CenteredLines({ lines, x, centerY, size, lineHeight, weight, italic, mu
   );
 }
 
-export function BoxText({ box, top = 0, bottom = 0, size = 13 }: { box: Box; top?: number; bottom?: number; size?: number }) {
-  const lineHeight = size * 1.23;
+export function BoxText({ box, top = 0, bottom = 0, size }: { box: Box; top?: number; bottom?: number; size?: number }) {
+  const actualSize = box.fontSize ?? size ?? 13;
+  const lineHeight = actualSize * 1.23;
   const placeholder = box.kind === 'junction' || labelBelow(box.kind) ? '' : 'Без названия';
   const maxLines = Math.max(1, Math.floor((box.h - top - bottom - 10) / lineHeight));
-  const lines = wrap(box.name || placeholder, box.w - 16, size).slice(0, maxLines);
+  const lines = wrap(box.name || placeholder, box.w - 16, actualSize).slice(0, maxLines);
   const centerY = box.y + top + (box.h - top - bottom) / 2;
-  return <CenteredLines lines={lines} x={box.x + box.w / 2} centerY={centerY} size={size} lineHeight={lineHeight} muted={!box.name} />;
+  return <CenteredLines lines={lines} x={box.x + box.w / 2} centerY={centerY} size={actualSize} lineHeight={lineHeight} muted={!box.name} />;
 }
 
 interface ShapeLabelProps {
